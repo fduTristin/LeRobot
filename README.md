@@ -32,7 +32,7 @@ pip install -e ".[feetech]"
 # 之后默认所有代码都在 lerobot 环境中运行
 conda activate lerobot
 cd LeRobot
-python examples/xlerobot/joycon_test_read_windows.py
+python examples/xlerobot/joycon_test_read_CN.py
 ```
 
 成功示例：
