@@ -102,7 +102,14 @@ class LeRobotDatasetMetadata:
             if force_cache_sync:
                 raise FileNotFoundError
             self.load_metadata()
-        except (FileNotFoundError, NotADirectoryError):
+        except (FileNotFoundError, NotADirectoryError) as exc:
+            # Local-only datasets use repo_id like "local/foo"; never try to pull from the Hub for those.
+            if str(self.repo_id).startswith("local/"):
+                raise FileNotFoundError(
+                    f"Local dataset at {self.root} is missing or incomplete (e.g. a meta file is absent). "
+                    f"Original error: {exc}. "
+                    "Use LeRobotDataset.create(...) to start a new dataset, or fix/remove the directory."
+                ) from exc
             if is_valid_version(self.revision):
                 self.revision = get_safe_version(self.repo_id, self.revision)
 
