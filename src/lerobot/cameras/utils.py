@@ -14,6 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 import platform
 from typing import cast
 
@@ -74,8 +75,14 @@ def get_cv2_backend() -> int:
     import cv2
 
     if platform.system() == "Windows":
-        return int(cv2.CAP_MSMF)  # Use MSMF for Windows instead of AVFOUNDATION
-    # elif platform.system() == "Darwin":  # macOS
-    #     return cv2.CAP_AVFOUNDATION
+        # DirectShow matches OpenCV's default `VideoCapture(index)` on many setups and works with
+        # typical USB UVC webcams. MSMF often fails on the same indices (`isOpened()` false).
+        # Set LEROBOT_OPENCV_USE_MSMF=1 to force Media Foundation if your device requires it.
+        use_msmf = os.environ.get("LEROBOT_OPENCV_USE_MSMF", "").strip().lower() in (
+            "1",
+            "true",
+            "yes",
+        )
+        return int(cv2.CAP_MSMF if use_msmf else cv2.CAP_DSHOW)
     else:  # Linux and others
         return int(cv2.CAP_ANY)

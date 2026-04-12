@@ -50,6 +50,8 @@ class OpenCVCameraConfig(CameraConfig):
         rotation: Image rotation setting (0°, 90°, 180°, or 270°). Defaults to no rotation.
         warmup_s: Time reading frames before returning from connect (in seconds)
         fourcc: FOURCC code for video format (e.g., "MJPG", "YUYV", "I420"). Defaults to None (auto-detect).
+        async_read_timeout_ms: Max wait for async_read() until a frame is available (background thread).
+            Windows + multiple USB cameras often need 500–1000 ms; default was 200 ms and caused TimeoutError.
 
     Note:
         - Only 3-channel color output (RGB/BGR) is currently supported.
@@ -62,6 +64,7 @@ class OpenCVCameraConfig(CameraConfig):
     rotation: Cv2Rotation = Cv2Rotation.NO_ROTATION
     warmup_s: int = 1
     fourcc: str | None = None
+    async_read_timeout_ms: float = 500.0
 
     def __post_init__(self) -> None:
         if self.color_mode not in (ColorMode.RGB, ColorMode.BGR):

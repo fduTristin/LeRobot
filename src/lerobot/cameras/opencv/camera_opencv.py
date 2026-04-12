@@ -116,6 +116,7 @@ class OpenCVCamera(Camera):
         self.fps = config.fps
         self.color_mode = config.color_mode
         self.warmup_s = config.warmup_s
+        self.async_read_timeout_ms: float = config.async_read_timeout_ms
 
         self.videocapture: cv2.VideoCapture | None = None
 
@@ -308,7 +309,12 @@ class OpenCVCamera(Camera):
             targets_to_scan = [int(i) for i in range(MAX_OPENCV_INDEX)]
 
         for target in targets_to_scan:
-            camera = cv2.VideoCapture(target)
+            # Must match connect(): on Windows connect() uses get_cv2_backend() (MSMF), while the
+            # default VideoCapture() often uses DSHOW — listing would show cameras that then fail to open.
+            if platform.system() == "Linux":
+                camera = cv2.VideoCapture(target)
+            else:
+                camera = cv2.VideoCapture(target, get_cv2_backend())
             if camera.isOpened():
                 default_width = int(camera.get(cv2.CAP_PROP_FRAME_WIDTH))
                 default_height = int(camera.get(cv2.CAP_PROP_FRAME_HEIGHT))
@@ -475,7 +481,7 @@ class OpenCVCamera(Camera):
         self.thread = None
         self.stop_event = None
 
-    def async_read(self, timeout_ms: float = 200) -> NDArray[Any]:
+    def async_read(self, timeout_ms: float | None = None) -> NDArray[Any]:
         """
         Reads the latest available frame asynchronously.
 
@@ -484,8 +490,8 @@ class OpenCVCamera(Camera):
         but may wait up to timeout_ms for the background thread to provide a frame.
 
         Args:
-            timeout_ms (float): Maximum time in milliseconds to wait for a frame
-                to become available. Defaults to 200ms (0.2 seconds).
+            timeout_ms (float | None): Maximum time in milliseconds to wait for a frame
+                to become available. If None, uses ``config.async_read_timeout_ms`` (default 500 ms).
 
         Returns:
             np.ndarray: The latest captured frame as a NumPy array in the format
@@ -498,6 +504,9 @@ class OpenCVCamera(Camera):
         """
         if not self.is_connected:
             raise DeviceNotConnectedError(f"{self} is not connected.")
+
+        if timeout_ms is None:
+            timeout_ms = self.async_read_timeout_ms
 
         if self.thread is None or not self.thread.is_alive():
             self._start_read_thread()
