@@ -267,8 +267,9 @@ class SimpleTeleopArm:
         # Gripper control - now set directly in main loop, no need to handle here
         pass
 
-    def p_control_action(self, robot):
-        obs = robot.get_observation()
+    def p_control_action(self, robot, obs=None):
+        if obs is None:
+            obs = robot.get_observation()
         current = {j: obs[f"{self.prefix}_arm_{j}.pos"] for j in self.joint_map}
         action = {}
         for j in self.target_positions:
@@ -315,8 +316,9 @@ class SimpleHeadControl:
             self.target_positions["head_motor_1"] -= self.degree_step
             print(f"[HEAD] head_motor_1: {self.target_positions['head_motor_1']}")
 
-    def p_control_action(self, robot):
-        obs = robot.get_observation()
+    def p_control_action(self, robot, obs=None):
+        if obs is None:
+            obs = robot.get_observation()
         action = {}
         for motor in self.target_positions:
             current = obs.get(f"{HEAD_MOTOR_MAP[motor]}.pos", 0.0)
