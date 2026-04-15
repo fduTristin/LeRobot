@@ -332,46 +332,41 @@ def _build_preview_vis(
     total_episodes: int,
     footer_cv2: str,
 ) -> np.ndarray | None:
-    """BGR uint8 image: status bar + 3-cam strip + footer (OpenCV putText)."""
-    max_w = cfg.record_preview_max_width if cfg.record_preview_max_width > 0 else 0
-    mosaic = make_three_camera_preview(
-        obs,
-        preview_height=cfg.record_preview_height,
-        max_display_width=max_w,
-    )
-    if mosaic is None:
+    """仅显示头部摄像头画面，大幅降低计算开销"""
+    
+    # 1. 只获取 head 图像
+    head_img = obs.get("head")
+    if head_img is None:
         return None
-    bar = np.zeros((32, mosaic.shape[1], 3), dtype=np.uint8)
-    task_short = cfg.record_task[:40]
-    if recording:
-        bar_color = (0, 0, 255)
-        bar_text = f"REC  ep={total_episodes}  task={task_short}"
-    else:
-        bar_color = (0, 200, 0)
-        bar_text = f"STANDBY  next_ep={total_episodes}  task={task_short}"
-    cv2.putText(
-        bar,
-        bar_text,
-        (8, 22),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        0.5,
-        bar_color,
-        1,
-        cv2.LINE_AA,
-    )
-    vis = np.vstack([bar, mosaic])
-    cv2.putText(
-        vis,
-        footer_cv2,
-        (10, vis.shape[0] - 10),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        0.55,
-        (200, 200, 200),
-        1,
-        cv2.LINE_AA,
-    )
-    return vis
+        
+    # 2. 转换为 BGR 格式
+    vis = _image_to_bgr_uint8(head_img)
+    if vis is None:
+        return None
 
+    # 3. (可选) 如果图像分辨率太高，只在这里做一次缩放
+    # h, w = vis.shape[:2]
+    # if h > cfg.record_preview_height:
+    #     scale = cfg.record_preview_height / h
+    #     vis = cv2.resize(vis, (int(w * scale), cfg.record_preview_height))
+
+    # 4. 加上状态栏信息 (保持原有逻辑，但宽度自适应头部的宽度)
+    bar = np.zeros((32, vis.shape[1], 3), dtype=np.uint8)
+    task_short = cfg.record_task[:40]
+    
+    bar_color = (0, 0, 255) if recording else (0, 200, 0)
+    bar_text = f"{'REC' if recording else 'STANDBY'} | Ep:{total_episodes} | HEAD ONLY"
+    
+    cv2.putText(bar, bar_text, (8, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.5, bar_color, 1, cv2.LINE_AA)
+    
+    # 拼接状态栏和头部画面
+    vis = np.vstack([bar, vis])
+    
+    # 底部退出提示
+    cv2.putText(vis, footer_cv2, (10, vis.shape[0] - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (200, 200, 200), 1, cv2.LINE_AA)
+    
+    return vis
+    
 
 def _close_mpl_preview_window() -> None:
     global _mpl_fig, _mpl_ax
@@ -583,21 +578,27 @@ def main() -> None:
                 joycon_left.record_stop_pulse = False
 
             if record_start and not recording:
+                # 在开始前清空一次 buffer，防止上次残留（虽然 save_episode 理应清空）
+                # dataset.episode_buffer.clear() # 视具体版本而定，有的版本在 save_episode 后会自动处理
+                
                 recording = True
                 ep_idx = dataset.meta.total_episodes
-                log_say(f"Recording started. Episode index {ep_idx} (will save on Left Minus).", blocking=False)
-                print(f"[RECORD] START recording episode_index={ep_idx}, task={cfg.record_task!r}")
+                log_say(f"Recording started. Episode index {ep_idx}", blocking=False)
+                print(f"[RECORD] START recording episode_index={ep_idx}")
 
             if record_stop and recording:
-                n_frames = dataset.episode_buffer.get("size", 0) if dataset.episode_buffer else 0
+                recording = False # 先置为 False，停止 add_frame 的调用
+                
+                # 检查当前 buffer 中的帧数
+                n_frames = dataset.num_frames # 建议使用 dataset 官方属性检查帧数
+                
                 if n_frames > 0:
-                    dataset.save_episode()
+                    dataset.save_episode() # 这步会增加 dataset.meta.total_episodes
                     done_idx = dataset.meta.total_episodes - 1
-                    log_say(f"Episode saved. Global episode index {done_idx}.", blocking=False)
-                    print(f"[RECORD] STOP recording saved episode index {done_idx}, total episodes={dataset.meta.total_episodes}")
+                    log_say(f"Episode saved. Index {done_idx}.", blocking=False)
+                    print(f"[RECORD] STOP: Saved ep {done_idx}. Total now: {dataset.meta.total_episodes}")
                 else:
-                    print("[RECORD] STOP recording ignored (no frames in this episode).")
-                recording = False
+                    print("[RECORD] STOP: No frames to save.")
 
             if control_button_right == 8:
                 print("[MAIN] Reset to zero position!")

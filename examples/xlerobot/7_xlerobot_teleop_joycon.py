@@ -69,7 +69,7 @@ class FixedAxesJoyconRobotics(JoyconRobotics):
     
     def common_update(self):
         # Modified update logic: joystick only controls fixed axes
-        speed_scale = 0.001
+        speed_scale = 0.0005
         
         # Get current orientation data to print pitch
         orientation_rad = self.get_orientation()
@@ -92,9 +92,9 @@ class FixedAxesJoyconRobotics(JoyconRobotics):
         joycon_stick_h_threshold = 300
         joycon_stick_h_range = 1000
         if joycon_stick_h > joycon_stick_h_threshold + self.joycon_stick_h_0:
-            self.position[1] += speed_scale * (joycon_stick_h - self.joycon_stick_h_0) / joycon_stick_h_range * self.dof_speed[1] * self.direction_reverse[1]
+            self.position[1] += 0.5 * speed_scale * (joycon_stick_h - self.joycon_stick_h_0) / joycon_stick_h_range * self.dof_speed[1] * self.direction_reverse[1]
         elif joycon_stick_h < self.joycon_stick_h_0 - joycon_stick_h_threshold:
-            self.position[1] += speed_scale * (joycon_stick_h - self.joycon_stick_h_0) / joycon_stick_h_range * self.dof_speed[1] * self.direction_reverse[1]
+            self.position[1] += 0.5 * speed_scale * (joycon_stick_h - self.joycon_stick_h_0) / joycon_stick_h_range * self.dof_speed[1] * self.direction_reverse[1]
         
         # Z-axis button control
         joycon_button_up = self.joycon.get_button_r() if self.joycon.is_right() else self.joycon.get_button_l()
