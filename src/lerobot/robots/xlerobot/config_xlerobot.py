@@ -97,7 +97,7 @@ class XLerobotConfig(RobotConfig):
     # Joy-Con dataset recording (examples/xlerobot/7_xlerobot_teleop_joycon_record.py)
     record_data_root: Path = Path(r"E:\FVL\EmbodiedAI\XLeRobot\LeRobot\data\recordings")  # None -> HF_LEROBOT_HOME at runtime
     record_exp_name: str = "pick_and_place"
-    record_task: str = "xlerobot joycon task"
+    record_task: str = "Pick up the block and place it in the plate."
     record_repo_id: str | None = None  # None -> "local/{record_exp_name}"
     record_resume: bool = True
     record_overwrite: bool = False
