@@ -332,39 +332,30 @@ def _build_preview_vis(
     total_episodes: int,
     footer_cv2: str,
 ) -> np.ndarray | None:
-    """仅显示头部摄像头画面，大幅降低计算开销"""
-    
-    # 1. 只获取 head 图像
+    """Show head camera only to minimize compute overhead."""
+
+    # Get head image
     head_img = obs.get("head")
     if head_img is None:
         return None
-        
-    # 2. 转换为 BGR 格式
+
+    # Convert to BGR
     vis = _image_to_bgr_uint8(head_img)
     if vis is None:
         return None
 
-    # 3. (可选) 如果图像分辨率太高，只在这里做一次缩放
-    # h, w = vis.shape[:2]
-    # if h > cfg.record_preview_height:
-    #     scale = cfg.record_preview_height / h
-    #     vis = cv2.resize(vis, (int(w * scale), cfg.record_preview_height))
-
-    # 4. 加上状态栏信息 (保持原有逻辑，但宽度自适应头部的宽度)
+    # Status bar overlaid on top of the head camera view
     bar = np.zeros((32, vis.shape[1], 3), dtype=np.uint8)
-    task_short = cfg.record_task[:40]
-    
     bar_color = (0, 0, 255) if recording else (0, 200, 0)
     bar_text = f"{'REC' if recording else 'STANDBY'} | Ep:{total_episodes} | HEAD ONLY"
-    
+
     cv2.putText(bar, bar_text, (8, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.5, bar_color, 1, cv2.LINE_AA)
-    
-    # 拼接状态栏和头部画面
+
     vis = np.vstack([bar, vis])
-    
-    # 底部退出提示
+
+    # Quit hint at bottom
     cv2.putText(vis, footer_cv2, (10, vis.shape[0] - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (200, 200, 200), 1, cv2.LINE_AA)
-    
+
     return vis
     
 
@@ -578,22 +569,21 @@ def main() -> None:
                 joycon_left.record_stop_pulse = False
 
             if record_start and not recording:
-                # 在开始前清空一次 buffer，防止上次残留（虽然 save_episode 理应清空）
-                # dataset.episode_buffer.clear() # 视具体版本而定，有的版本在 save_episode 后会自动处理
-                
                 recording = True
                 ep_idx = dataset.meta.total_episodes
                 log_say(f"Recording started. Episode index {ep_idx}", blocking=False)
                 print(f"[RECORD] START recording episode_index={ep_idx}")
 
             if record_stop and recording:
-                recording = False # 先置为 False，停止 add_frame 的调用
-                
-                # 检查当前 buffer 中的帧数
-                n_frames = dataset.num_frames # 建议使用 dataset 官方属性检查帧数
-                
+                recording = False
+
+                # Use episode_buffer["size"] instead of dataset.num_frames
+                # dataset.num_frames returns the number of SAVED frames on disk,
+                # not the frames in the current episode buffer waiting to be saved
+                n_frames = dataset.episode_buffer["size"]
+
                 if n_frames > 0:
-                    dataset.save_episode() # 这步会增加 dataset.meta.total_episodes
+                    dataset.save_episode()
                     done_idx = dataset.meta.total_episodes - 1
                     log_say(f"Episode saved. Index {done_idx}.", blocking=False)
                     print(f"[RECORD] STOP: Saved ep {done_idx}. Total now: {dataset.meta.total_episodes}")
@@ -605,19 +595,28 @@ def main() -> None:
                 right_arm.move_to_zero_position(robot)
                 left_arm.move_to_zero_position(robot)
                 head_control.move_to_zero_position(robot)
-                obs = robot.get_observation()
-                if preview_backend and render_live_preview(
-                    window_name,
-                    cfg,
-                    obs,
-                    recording=recording,
-                    total_episodes=dataset.meta.total_episodes,
-                    backend=preview_backend,
-                ):
-                    print("\n[MAIN] Quit from preview (q/ESC or closed figure).")
-                    break
                 continue
 
+            # Get current observation (before executing action)
+            obs = robot.get_observation()
+
+            # Live preview (show observation immediately after capture)
+            if preview_backend and render_live_preview(
+                window_name,
+                cfg,
+                obs,
+                recording=recording,
+                total_episodes=dataset.meta.total_episodes,
+                backend=preview_backend,
+            ):
+                print("\n[MAIN] Quit from preview (q/ESC or closed figure).")
+                break
+
+            # Record current observation (state before action execution)
+            if recording:
+                obs_frame = build_dataset_frame(dataset.features, obs, prefix=OBS_STR)
+
+            # Compute and send action
             right_arm.target_positions["gripper"] = gripper_right
             left_arm.target_positions["gripper"] = gripper_left
 
@@ -638,25 +637,11 @@ def main() -> None:
             action = {**left_action, **right_action, **head_action, **base_action}
             sent_action = robot.send_action(action)
 
-            # Single observation read per frame (see 7_xlerobot_teleop_joycon.py p_control_action).
-            obs = robot.get_observation()
-
+            # Record action (paired with the prior observation)
             if recording:
-                obs_frame = build_dataset_frame(dataset.features, obs, prefix=OBS_STR)
                 action_frame = build_dataset_frame(dataset.features, sent_action, prefix=ACTION)
                 frame = {**obs_frame, **action_frame, "task": cfg.record_task}
                 dataset.add_frame(frame)
-
-            if preview_backend and render_live_preview(
-                window_name,
-                cfg,
-                obs,
-                recording=recording,
-                total_episodes=dataset.meta.total_episodes,
-                backend=preview_backend,
-            ):
-                print("\n[MAIN] Quit from preview (q/ESC or closed figure).")
-                break
 
             dt_s = time.perf_counter() - start_loop_t
             precise_sleep(max(1.0 / fps - dt_s, 0.0))
