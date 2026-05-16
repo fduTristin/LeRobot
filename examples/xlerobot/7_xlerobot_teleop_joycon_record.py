@@ -300,7 +300,6 @@ def main() -> None:
         left_arm.move_to_zero_position(robot)
         right_arm.move_to_zero_position(robot)
         head_control.move_to_zero_position(robot)
-        obs = robot.get_observation()
 
         while True:
             start_loop_t = time.perf_counter()
@@ -341,7 +340,6 @@ def main() -> None:
                 print("[MAIN] Reset to zero position!")
                 right_arm.move_to_zero_position(robot)
                 left_arm.move_to_zero_position(robot)
-                head_control.move_to_zero_position(robot)
                 continue
 
             # Get current observation (before executing action)
@@ -359,7 +357,6 @@ def main() -> None:
             right_action = right_arm.p_control_action(robot, obs=obs)
             left_arm.handle_joycon_input(pose_left, gripper_left)
             left_action = left_arm.p_control_action(robot, obs=obs)
-            head_control.handle_joycon_input(joycon_left)
             head_action = head_control.p_control_action(robot, obs=obs)
 
             base_action = get_joycon_base_action(joycon_right, robot)
