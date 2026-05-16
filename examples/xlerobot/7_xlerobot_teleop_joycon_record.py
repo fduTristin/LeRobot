@@ -11,14 +11,11 @@ import platform
 import shutil
 import time
 from pathlib import Path
-from typing import Any, cast
+from typing import cast
 
 # Match detect_cameras.py: avoid MSMF transform issues on some Windows + OpenCV builds.
 if platform.system() == "Windows" and "OPENCV_VIDEOIO_MSMF_ENABLE_HW_TRANSFORMS" not in os.environ:
     os.environ["OPENCV_VIDEOIO_MSMF_ENABLE_HW_TRANSFORMS"] = "0"
-
-import cv2
-import numpy as np
 
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from lerobot.datasets.utils import build_dataset_frame, hw_to_dataset_features
@@ -27,81 +24,6 @@ from lerobot.robots.xlerobot import XLerobot, XLerobotConfig
 from lerobot.utils.constants import ACTION, HF_LEROBOT_HOME, OBS_STR
 from lerobot.utils.robot_utils import precise_sleep
 from lerobot.utils.utils import log_say
-
-# OpenCV HighGUI probe (same pattern as examples/xlerobot/detect_cameras.py).
-_OPENCV_HIGHGUI_OK: bool | None = None
-
-
-def cv2_destroy_all_safe() -> None:
-    try:
-        cv2.destroyAllWindows()
-    except cv2.error:
-        pass
-
-
-def opencv_highgui_available() -> bool:
-    global _OPENCV_HIGHGUI_OK
-    if _OPENCV_HIGHGUI_OK is not None:
-        return _OPENCV_HIGHGUI_OK
-    try:
-        probe = np.zeros((8, 8, 3), dtype=np.uint8)
-        cv2.imshow("_xlerobot_record_gui_probe", probe)
-        cv2.waitKey(1)
-        _OPENCV_HIGHGUI_OK = True
-    except cv2.error:
-        _OPENCV_HIGHGUI_OK = False
-    finally:
-        cv2_destroy_all_safe()
-    return bool(_OPENCV_HIGHGUI_OK)
-
-
-_NO_PREVIEW_WARNED = False
-_MPL_FALLBACK_WARNED = False
-
-
-def print_no_preview_once() -> None:
-    """Warn when record_show_preview is True but neither OpenCV HighGUI nor matplotlib is usable."""
-    global _NO_PREVIEW_WARNED
-    if _NO_PREVIEW_WARNED:
-        return
-    _NO_PREVIEW_WARNED = True
-    print(
-        "\n[preview] No display backend: OpenCV HighGUI unavailable (e.g. opencv-python-headless) "
-        "and matplotlib is not installed.\n"
-        "          Install: pip install matplotlib\n"
-        "          Or for OpenCV windows: pip uninstall opencv-python-headless opencv-python -y && pip install opencv-python\n"
-        "          Or set record_show_preview=False in XLerobotConfig.\n"
-    )
-
-
-def print_matplotlib_fallback_once() -> None:
-    """Same idea as detect_cameras.print_headless_hint when falling back to matplotlib."""
-    global _MPL_FALLBACK_WARNED
-    if _MPL_FALLBACK_WARNED:
-        return
-    _MPL_FALLBACK_WARNED = True
-    print(
-        "\n[display] OpenCV HighGUI is not available (common with opencv-python-headless).\n"
-        "          Fix: pip uninstall opencv-python-headless opencv-python -y\n"
-        "               pip install opencv-python\n"
-        "          Falling back to matplotlib for live preview (close the figure window to stop).\n"
-    )
-
-
-def resolve_preview_backend() -> str | None:
-    """Prefer cv2.imshow; else matplotlib like detect_cameras.py --live."""
-    if opencv_highgui_available():
-        return "cv2"
-    try:
-        import matplotlib.pyplot as plt  # noqa: F401
-    except ImportError:
-        return None
-    return "matplotlib"
-
-
-# --------------------------------------------------------------------------- #
-# Load shared teleop classes from the non-recording script (same directory)
-# --------------------------------------------------------------------------- #
 
 
 def _load_joycon_teleop_module():
@@ -275,158 +197,6 @@ class RecordingFixedAxesJoyconRobotics(FixedAxesJoyconRobotics):
         return self.position, self.gripper_state, self.button_control
 
 
-CAMERA_KEYS = ("left_wrist", "right_wrist", "head")
-
-
-def _image_to_bgr_uint8(img: Any) -> np.ndarray | None:
-    if img is None:
-        return None
-    if hasattr(img, "numpy"):
-        img = img.numpy()
-    arr = np.asarray(img)
-    if arr.ndim == 3 and arr.shape[0] in (1, 3) and arr.shape[0] < arr.shape[-1]:
-        arr = np.transpose(arr, (1, 2, 0))
-    if arr.dtype != np.uint8:
-        if np.nanmax(arr) <= 1.0:
-            arr = (np.clip(arr, 0.0, 1.0) * 255).astype(np.uint8)
-        else:
-            arr = arr.astype(np.uint8)
-    return np.ascontiguousarray(arr)
-
-
-def make_three_camera_preview(
-    obs: dict[str, Any],
-    preview_height: int,
-    *,
-    max_display_width: int = 0,
-) -> np.ndarray | None:
-    """Horizontal strip of three cameras for OpenCV imshow (see detect_cameras.run_live_all scaling)."""
-    tiles = []
-    for key in CAMERA_KEYS:
-        bgr = _image_to_bgr_uint8(obs.get(key))
-        if bgr is None:
-            return None
-        h, w = bgr.shape[:2]
-        scale = preview_height / float(h)
-        new_w = max(1, int(w * scale))
-        tiles.append(cv2.resize(bgr, (new_w, preview_height)))
-    strip = np.hstack(tiles)
-    sw, sh = strip.shape[1], strip.shape[0]
-    if max_display_width > 0 and sw > max_display_width:
-        scale = max_display_width / float(sw)
-        nh = max(1, int(sh * scale))
-        strip = cv2.resize(strip, (max_display_width, nh))
-    return strip
-
-
-_preview_window_named = False
-_mpl_fig: Any = None
-_mpl_ax: Any = None
-
-
-def _build_preview_vis(
-    cfg: XLerobotConfig,
-    obs: dict[str, Any],
-    *,
-    recording: bool,
-    total_episodes: int,
-    footer_cv2: str,
-) -> np.ndarray | None:
-    """Show head camera only to minimize compute overhead."""
-
-    # Get head image
-    head_img = obs.get("head")
-    if head_img is None:
-        return None
-
-    # Convert to BGR
-    vis = _image_to_bgr_uint8(head_img)
-    if vis is None:
-        return None
-
-    # Status bar overlaid on top of the head camera view
-    bar = np.zeros((32, vis.shape[1], 3), dtype=np.uint8)
-    bar_color = (0, 0, 255) if recording else (0, 200, 0)
-    bar_text = f"{'REC' if recording else 'STANDBY'} | Ep:{total_episodes} | HEAD ONLY"
-
-    cv2.putText(bar, bar_text, (8, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.5, bar_color, 1, cv2.LINE_AA)
-
-    vis = np.vstack([bar, vis])
-
-    # Quit hint at bottom
-    cv2.putText(vis, footer_cv2, (10, vis.shape[0] - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (200, 200, 200), 1, cv2.LINE_AA)
-
-    return vis
-    
-
-def _close_mpl_preview_window() -> None:
-    global _mpl_fig, _mpl_ax
-    if _mpl_fig is None:
-        return
-    try:
-        import matplotlib.pyplot as plt
-
-        plt.close(_mpl_fig)
-    except Exception:
-        pass
-    _mpl_fig = None
-    _mpl_ax = None
-    try:
-        import matplotlib.pyplot as plt
-
-        plt.ioff()
-    except Exception:
-        pass
-
-
-def render_live_preview(
-    window_name: str,
-    cfg: XLerobotConfig,
-    obs: dict[str, Any],
-    *,
-    recording: bool,
-    total_episodes: int,
-    backend: str,
-) -> bool:
-    """Show 3-camera mosaic. backend: 'cv2' | 'matplotlib'. Returns True to exit main loop (q/ESC or closed fig)."""
-    global _preview_window_named, _mpl_fig, _mpl_ax
-
-    if backend == "cv2":
-        footer = "q / ESC quit"
-        vis = _build_preview_vis(cfg, obs, recording=recording, total_episodes=total_episodes, footer_cv2=footer)
-        if vis is None:
-            return False
-        if not _preview_window_named:
-            cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
-            _preview_window_named = True
-        cv2.imshow(window_name, vis)
-        key = cv2.waitKey(1) & 0xFF
-        return key in (27, ord("q"))
-
-    if backend == "matplotlib":
-        footer = "close window to stop"
-        vis = _build_preview_vis(cfg, obs, recording=recording, total_episodes=total_episodes, footer_cv2=footer)
-        if vis is None:
-            return False
-        import matplotlib.pyplot as plt
-
-        if _mpl_fig is None:
-            plt.ion()
-            _mpl_fig, _mpl_ax = plt.subplots(num=window_name)
-        assert _mpl_ax is not None
-        _mpl_ax.clear()
-        _mpl_ax.imshow(cv2.cvtColor(vis, cv2.COLOR_BGR2RGB))
-        _mpl_ax.axis("off")
-        _mpl_fig.canvas.draw_idle()
-        _mpl_fig.canvas.flush_events()
-        plt.pause(0.02)
-        if not plt.fignum_exists(_mpl_fig.number):
-            return True
-        return False
-
-    return False
-
-
 def main() -> None:
     cfg = XLerobotConfig(id="my_xlerobot")
     fps = cfg.cam_fps
@@ -515,30 +285,7 @@ def main() -> None:
         print(f"[RECORD] Created dataset at {dataset.root}")
 
     try:
-        window_name = "XLeRobot teleop LIVE (3 cams)"
         recording = False
-        preview_backend = resolve_preview_backend() if cfg.record_show_preview else None
-        if cfg.record_show_preview and preview_backend is None:
-            print_no_preview_once()
-        elif cfg.record_show_preview and preview_backend == "matplotlib":
-            print_matplotlib_fallback_once()
-
-        # Open the preview window as soon as cameras work (before Joy-Con init, which can take time).
-        if preview_backend:
-            try:
-                obs_boot = robot.get_observation()
-                if render_live_preview(
-                    window_name,
-                    cfg,
-                    obs_boot,
-                    recording=False,
-                    total_episodes=dataset.meta.total_episodes,
-                    backend=preview_backend,
-                ):
-                    print("\n[MAIN] Quit from preview (q/ESC or closed figure).")
-                    return
-            except Exception as e:
-                print(f"[preview] First-frame preview failed (continuing): {e}")
 
         joycon_right = RecordingFixedAxesJoyconRobotics("right", dof_speed=[2, 2, 2, 1, 1, 1])
         joycon_left = RecordingFixedAxesJoyconRobotics("left", dof_speed=[2, 2, 2, 1, 1, 1])
@@ -600,18 +347,6 @@ def main() -> None:
             # Get current observation (before executing action)
             obs = robot.get_observation()
 
-            # Live preview (show observation immediately after capture)
-            if preview_backend and render_live_preview(
-                window_name,
-                cfg,
-                obs,
-                recording=recording,
-                total_episodes=dataset.meta.total_episodes,
-                backend=preview_backend,
-            ):
-                print("\n[MAIN] Quit from preview (q/ESC or closed figure).")
-                break
-
             # Record current observation (state before action execution)
             if recording:
                 obs_frame = build_dataset_frame(dataset.features, obs, prefix=OBS_STR)
@@ -649,8 +384,6 @@ def main() -> None:
     except KeyboardInterrupt:
         print("\n[MAIN] Interrupted.")
     finally:
-        cv2_destroy_all_safe()
-        _close_mpl_preview_window()
         if dataset is not None:
             dataset.finalize()
             if cfg.record_push_to_hub:
