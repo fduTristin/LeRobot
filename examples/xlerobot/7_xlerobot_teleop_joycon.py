@@ -284,10 +284,10 @@ class SimpleHeadControl:
         self.degree_step = 2  # Move 2 degrees each time
         # Initialize head motor positions
         self.target_positions = {
-            "head_motor_1": initial_obs.get("head_motor_1.pos", 0.0),
-            "head_motor_2": initial_obs.get("head_motor_2.pos", 0.0),
+            "head_motor_1": initial_obs.get("head_motor_1.pos", 0.6055),
+            "head_motor_2": initial_obs.get("head_motor_2.pos", 41.2684),
         }
-        self.zero_pos = {"head_motor_1": 0.0, "head_motor_2": 0.0}
+        self.zero_pos = {"head_motor_1": 0.6055, "head_motor_2": 41.2684}
 
     def move_to_zero_position(self, robot):
         print("[HEAD] Moving to Zero Position: {self.zero_pos} ......")
