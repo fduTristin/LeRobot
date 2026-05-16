@@ -316,7 +316,7 @@ class SimpleHeadControl:
         self.zero_pos = {"head_motor_1": 0.6055, "head_motor_2": 41.2684}
 
     def move_to_zero_position(self, robot):
-        print("[HEAD] Moving to Zero Position: {self.zero_pos} ......")
+        print(f"[HEAD] Moving to Zero Position: {self.zero_pos} ......")
         self.target_positions = self.zero_pos.copy()
         action = self.p_control_action(robot)
         robot.send_action(action)

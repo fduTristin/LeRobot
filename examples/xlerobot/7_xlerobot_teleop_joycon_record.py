@@ -357,6 +357,8 @@ def main() -> None:
             right_action = right_arm.p_control_action(robot, obs=obs)
             left_arm.handle_joycon_input(pose_left, gripper_left)
             left_action = left_arm.p_control_action(robot, obs=obs)
+            # Disable head control since there's no need to move the head in pick_and_place task
+            # head_control.handle_joycon_input(joycon_left)
             head_action = head_control.p_control_action(robot, obs=obs)
 
             base_action = get_joycon_base_action(joycon_right, robot)
