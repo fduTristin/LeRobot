@@ -172,12 +172,31 @@ class FixedAxesJoyconRobotics(JoyconRobotics):
         return self.position, self.gripper_state, self.button_control
     
 class SimpleTeleopArm:
-    def __init__(self, joint_map, initial_obs, kinematics, prefix="right", kp=1):
+    """Arm teleop control via Joy-Con. Speed config keys:
+    - x_scale: Joy-Con X-axis → workspace X translation  (default 1.0)
+    - z_scale: Joy-Con Z-axis → workspace Y translation  (default 1.0)
+    - shoulder_pan_scale: Joy-Con Y-axis → shoulder pan   (default 50.0)
+    - roll_scale: Joy-Con roll → wrist roll              (default 25.0)
+    - pitch_scale: Joy-Con pitch → wrist pitch offset   (default 60.0)
+    """
+
+    DEFAULT_SPEED_CONFIG = {
+        "x_scale": 0.5,
+        "z_scale": 0.5,
+        "shoulder_pan_scale": 80.0,
+        "roll_scale": 25.0,
+        "pitch_scale": 50.0,
+    }
+
+    def __init__(
+        self, joint_map, initial_obs, kinematics, prefix="right", kp=1, speed_config=None
+    ):
         self.joint_map = joint_map
         self.prefix = prefix
         self.kp = kp
+        self.speed_config = {**self.DEFAULT_SPEED_CONFIG, **(speed_config or {})}
         self.kinematics = kinematics
-        
+
         # Initial joint positions
         self.joint_positions = {
             "shoulder_pan": initial_obs[f"{prefix}_arm_shoulder_pan.pos"],
@@ -187,16 +206,12 @@ class SimpleTeleopArm:
             "wrist_roll": initial_obs[f"{prefix}_arm_wrist_roll.pos"],
             "gripper": initial_obs[f"{prefix}_arm_gripper.pos"],
         }
-        
+
         # Set initial x/y to fixed values
         self.current_x = 0.1629
         self.current_y = 0.1131
         self.pitch = 0.0
-        
-        # Set step size
-        self.degree_step = 2
-        self.xy_step = 0.005
-        
+
         # P control target positions, set to zero position
         self.target_positions = {
             "shoulder_pan": 0.0,
@@ -207,12 +222,12 @@ class SimpleTeleopArm:
             "gripper": 0.0,
         }
         self.zero_pos = {
-            'shoulder_pan': 0.0,
-            'shoulder_lift': 0.0,
-            'elbow_flex': 0.0,
-            'wrist_flex': 0.0,
-            'wrist_roll': 0.0,
-            'gripper': 0.0
+            "shoulder_pan": 0.0,
+            "shoulder_lift": 0.0,
+            "elbow_flex": 0.0,
+            "wrist_flex": 0.0,
+            "wrist_roll": 0.0,
+            "gripper": 0.0,
         }
 
     def move_to_zero_position(self, robot):
@@ -233,24 +248,25 @@ class SimpleTeleopArm:
     def handle_joycon_input(self, joycon_pose, gripper_state):
         """Handle Joy-Con input, update arm control - based on 6_so100_joycon_ee_control.py"""
         x, y, z, roll_, pitch_, yaw = joycon_pose
-        
-        # Calculate pitch control - consistent with 6_so100_joycon_ee_control.py
-        pitch = -pitch_ * 60 + 10
-        
-        # Set coordinates - consistent with 6_so100_joycon_ee_control.py
-        current_x = 0.1629 + x
-        current_y = 0.1131 + z
-        
-        # Calculate roll - consistent with 6_so100_joycon_ee_control.py
-        roll = roll_ * 45
-        
+
+        # Workspace X/Y from Joy-Con X/Z axes
+        current_x = 0.1629 + x * self.speed_config["x_scale"]
+        current_y = 0.1131 + z * self.speed_config["z_scale"]
+
+        # Wrist pitch: offset (+10) keeps arm from fully folding under gravity
+        pitch = -pitch_ * self.speed_config["pitch_scale"] + 10
+
+        # Wrist roll from Joy-Con roll axis
+        roll = roll_ * self.speed_config["roll_scale"]
+
         print(f"[{self.prefix}] pitch: {pitch}")
-        
-        # Add y value to control shoulder_pan joint - consistent with 6_so100_joycon_ee_control.py
-        y_scale = 250.0  # Scaling factor, can be adjusted as needed
-        self.target_positions["shoulder_pan"] = y * y_scale
-        
-        # Use inverse kinematics to calculate joint angles - consistent with 6_so100_joycon_ee_control.py
+
+        # Shoulder pan from Joy-Con Y axis
+        self.target_positions["shoulder_pan"] = (
+            y * self.speed_config["shoulder_pan_scale"]
+        )
+
+        # Use inverse kinematics to calculate joint angles
         try:
             joint2_target, joint3_target = self.kinematics.inverse_kinematics(current_x, current_y)
             self.target_positions["shoulder_lift"] = joint2_target
@@ -279,13 +295,23 @@ class SimpleTeleopArm:
         return action
 
 class SimpleHeadControl:
-    def __init__(self, initial_obs, kp=1):
+    """Head motor teleop control via Joy-Con D-pad. Speed config keys:
+    - head_motor_1_step: degrees per button press for head_motor_1  (default 2.0)
+    - head_motor_2_step: degrees per button press for head_motor_2  (default 2.0)
+    """
+
+    DEFAULT_SPEED_CONFIG = {
+        "head_motor_1_step": 2.0,
+        "head_motor_2_step": 2.0,
+    }
+
+    def __init__(self, initial_obs, kp=1, speed_config=None):
         self.kp = kp
-        self.degree_step = 2  # Move 2 degrees each time
+        self.speed_config = {**self.DEFAULT_SPEED_CONFIG, **(speed_config or {})}
         # Initialize head motor positions
         self.target_positions = {
             "head_motor_1": initial_obs.get("head_motor_1.pos", 0.6055),
-            "head_motor_2": initial_obs.get("head_motor_2.pos", 41.2684),
+            "head_motor_2": initial_obs.get("head_motor_2.pos", 0.0),
         }
         self.zero_pos = {"head_motor_1": 0.6055, "head_motor_2": 41.2684}
 
@@ -297,23 +323,22 @@ class SimpleHeadControl:
 
     def handle_joycon_input(self, joycon):
         """Handle left Joy-Con directional pad input to control head motors"""
-        # Get left Joy-Con directional pad state
-        button_up = joycon.joycon.get_button_up()      # Up: head_motor_1+
-        button_down = joycon.joycon.get_button_down()  # Down: head_motor_1-
-        button_left = joycon.joycon.get_button_left()  # Left: head_motor_2+
-        button_right = joycon.joycon.get_button_right() # Right: head_motor_2-
-        
+        button_up = joycon.joycon.get_button_up()       # head_motor_2+
+        button_down = joycon.joycon.get_button_down()   # head_motor_2-
+        button_left = joycon.joycon.get_button_left()   # head_motor_1+
+        button_right = joycon.joycon.get_button_right() # head_motor_1-
+
         if button_up == 1:
-            self.target_positions["head_motor_2"] += self.degree_step
+            self.target_positions["head_motor_2"] += self.speed_config["head_motor_2_step"]
             print(f"[HEAD] head_motor_2: {self.target_positions['head_motor_2']}")
         if button_down == 1:
-            self.target_positions["head_motor_2"] -= self.degree_step
+            self.target_positions["head_motor_2"] -= self.speed_config["head_motor_2_step"]
             print(f"[HEAD] head_motor_2: {self.target_positions['head_motor_2']}")
         if button_left == 1:
-            self.target_positions["head_motor_1"] += self.degree_step
+            self.target_positions["head_motor_1"] += self.speed_config["head_motor_1_step"]
             print(f"[HEAD] head_motor_1: {self.target_positions['head_motor_1']}")
         if button_right == 1:
-            self.target_positions["head_motor_1"] -= self.degree_step
+            self.target_positions["head_motor_1"] -= self.speed_config["head_motor_1_step"]
             print(f"[HEAD] head_motor_1: {self.target_positions['head_motor_1']}")
 
     def p_control_action(self, robot, obs=None):
@@ -458,9 +483,9 @@ def main():
     obs = robot.get_observation()
     kin_left = SO101Kinematics()
     kin_right = SO101Kinematics()
-    left_arm = SimpleTeleopArm(LEFT_JOINT_MAP, obs, kin_left, prefix="left")
-    right_arm = SimpleTeleopArm(RIGHT_JOINT_MAP, obs, kin_right, prefix="right")
-    head_control = SimpleHeadControl(obs)
+    left_arm = SimpleTeleopArm(LEFT_JOINT_MAP, obs, kin_left, prefix="left", speed_config=None)
+    right_arm = SimpleTeleopArm(RIGHT_JOINT_MAP, obs, kin_right, prefix="right", speed_config=None)
+    head_control = SimpleHeadControl(obs, speed_config=None)
 
     # Move both arms and head to zero position at start
     left_arm.move_to_zero_position(robot)

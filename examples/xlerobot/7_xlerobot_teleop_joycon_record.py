@@ -293,9 +293,9 @@ def main() -> None:
         obs = robot.get_observation()
         kin_left = SO101Kinematics()
         kin_right = SO101Kinematics()
-        left_arm = SimpleTeleopArm(LEFT_JOINT_MAP, obs, kin_left, prefix="left")
-        right_arm = SimpleTeleopArm(RIGHT_JOINT_MAP, obs, kin_right, prefix="right")
-        head_control = SimpleHeadControl(obs)
+        left_arm = SimpleTeleopArm(LEFT_JOINT_MAP, obs, kin_left, prefix="left", speed_config=None)
+        right_arm = SimpleTeleopArm(RIGHT_JOINT_MAP, obs, kin_right, prefix="right", speed_config=None)
+        head_control = SimpleHeadControl(obs, speed_config=None)
 
         left_arm.move_to_zero_position(robot)
         right_arm.move_to_zero_position(robot)
