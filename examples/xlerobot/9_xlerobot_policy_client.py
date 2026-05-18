@@ -56,7 +56,10 @@ def _unpack_array(obj):
 
 
 _packer = msgpack.Packer(default=_pack_array)
-_unpacker = msgpack.Unpacker(object_hook=_unpack_array)
+
+
+def _unpackb(data: bytes):
+    return msgpack.unpackb(data, object_hook=_unpack_array, raw=False)
 
 
 # ---------------------------------------------------------------------------
@@ -77,7 +80,7 @@ class PolicyClient:
         while True:
             try:
                 conn = websockets.sync.client.connect(self._uri, compression=None)
-                metadata = _unpacker.unpackb(conn.recv())
+                metadata = _unpackb(conn.recv())
                 logging.info("Connected to policy server at %s  metadata=%s", self._uri, metadata)
                 return conn, metadata
             except (ConnectionRefusedError, OSError) as e:
@@ -92,7 +95,7 @@ class PolicyClient:
         try:
             self._conn.send(_packer.pack(obs))
             response = self._conn.recv()
-        except websockets.sync.client.ConnectionClosed:
+        except (websockets.sync.client.ConnectionClosed, OSError):
             self.logger.warning("Server disconnected, reconnecting...")
             self._conn, self._metadata = self._connect()
             self._conn.send(_packer.pack(obs))
@@ -101,7 +104,7 @@ class PolicyClient:
         if isinstance(response, str):
             raise RuntimeError(f"Policy server error:\n{response}")
 
-        return _unpacker.unpackb(response)
+        return _unpackb(response)
 
     def close(self):
         self._conn.close()
@@ -261,8 +264,16 @@ def dispatch_action(action: dict, robot: XLerobot) -> None:
     The action dict contains:
         - actions: (ACTION_DIM,) step extracted from the chunk by ActionChunkBroker
         - server_timing: metadata (ignored)
+
+    The server outputs absolute joint positions. Use directly as targets.
     """
-    robot.send_action(action)
+    action_array = action.get("actions")
+    if action_array is None:
+        raise ValueError("No 'actions' in action dict")
+
+    # Server returns absolute positions; use directly as targets
+    formatted = {key: float(action_array[i]) for i, key in enumerate(_STATE_KEYS)}
+    robot.send_action(formatted)
 
 
 # ---------------------------------------------------------------------------
@@ -279,9 +290,29 @@ def main() -> None:
     parser.add_argument("--server.task", default="Pick up the block and place it in the plate.", help="Text prompt for the policy")
     parser.add_argument("--loop.hz", type=float, default=30.0)
     parser.add_argument("--action.horizon", type=int, default=30)
+    parser.add_argument("--execution.horizon", type=int, default=15, help="Number of actions to execute per chunk before fetching a new one")
     args = parser.parse_args()
 
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+    log_dir = Path(__file__).resolve().parent / "logs"
+    log_dir.mkdir(exist_ok=True)
+    log_path = log_dir / "xlerobot_policy_client.log"
+
+    class ImmediateWriteHandler(logging.FileHandler):
+        """FileHandler that flushes after every emit."""
+        def emit(self, record):
+            super().emit(record)
+            self.flush()
+
+    root_logger = logging.getLogger()
+    root_logger.setLevel(logging.INFO)
+    root_logger.handlers.clear()
+    root_logger.addHandler(logging.StreamHandler())
+    root_logger.addHandler(ImmediateWriteHandler(log_path, encoding="utf-8"))
+
+    formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+    for h in root_logger.handlers:
+        h.setFormatter(formatter)
+
     logger = logging.getLogger(__name__)
 
     if platform.system() == "Windows" and "OPENCV_VIDEOIO_MSMF_ENABLE_HW_TRANSFORMS" not in __import__("os").environ:
@@ -305,20 +336,42 @@ def main() -> None:
     # --- Inference loop ---
     loop_hz = getattr(args, "loop.hz")
     loop_period = 1.0 / loop_hz
+    execution_horizon = getattr(args, "execution.horizon")
+    exec_step = 0
 
-    logger.info("Starting inference loop at %.1f Hz. Press Ctrl+C to stop.", loop_hz)
+    logger.info("Starting inference loop at %.1f Hz (execution_horizon=%d). Press Ctrl+C to stop.", loop_hz, execution_horizon)
     try:
         while True:
             t_start = time.monotonic()
 
+            # Fetch a new action chunk from the server every execution_horizon steps
+            if exec_step == 0:
+                raw_obs = robot.get_observation()
+                obs = format_observation(raw_obs, task=task)
+                broker._chunk = broker._fetch_chunk(obs)
+                # Slice chunk to only keep the first execution_horizon actions
+                for key, value in broker._chunk.items():
+                    if isinstance(value, np.ndarray) and value.ndim == 2:
+                        broker._chunk[key] = value[:execution_horizon]
+                broker._cur_step = 0
+                logger.debug("Fetched new action chunk (execution_horizon=%d)", execution_horizon)
+
             raw_obs = robot.get_observation()
             obs = format_observation(raw_obs, task=task)
 
-            # ActionChunkBroker handles the chunk buffering:
-            # - Fetches a new chunk from the server only when the previous one is exhausted
-            # - Returns one step at a time locally (no network round-trip per step)
-            action = broker.get_action(obs)
-            dispatch_action(action, robot)
+            # Extract the current step from the cached chunk
+            chunk_action = {}
+            for key, value in broker._chunk.items():
+                if isinstance(value, np.ndarray) and value.ndim == 2:
+                    chunk_action[key] = value[broker._cur_step]
+                else:
+                    chunk_action[key] = value
+
+            logger.info("Action: %s", chunk_action)
+            dispatch_action(chunk_action, robot)
+
+            broker._cur_step += 1
+            exec_step = (exec_step + 1) % execution_horizon
 
             elapsed = time.monotonic() - t_start
             if elapsed > loop_period * 2:
