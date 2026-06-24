@@ -286,7 +286,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="XLeRobot Policy Client")
     parser.add_argument("--robot.id", default="my_xlerobot")
     parser.add_argument("--server.host", default="localhost")
-    parser.add_argument("--server.port", type=int, default=8080)
+    parser.add_argument("--server.port", type=int, default=8081)
     parser.add_argument("--server.task", default="Pick up the block and place it in the plate.", help="Text prompt for the policy")
     parser.add_argument("--loop.hz", type=float, default=30.0)
     parser.add_argument("--action.horizon", type=int, default=30)
@@ -356,8 +356,8 @@ def main() -> None:
                 broker._cur_step = 0
                 logger.debug("Fetched new action chunk (execution_horizon=%d)", execution_horizon)
 
-            raw_obs = robot.get_observation()
-            obs = format_observation(raw_obs, task=task)
+            # raw_obs = robot.get_observation()
+            # obs = format_observation(raw_obs, task=task)
 
             # Extract the current step from the cached chunk
             chunk_action = {}
