@@ -244,10 +244,10 @@ def format_observation(raw_obs: dict[str, Any], task: str | None = None) -> dict
         return img
 
     obs = {
-        "observation/state": state,
-        "observation/image_head": _parse_image(raw_obs["head"]),
-        "observation/image_left_wrist": _parse_image(raw_obs["left_wrist"]),
-        "observation/image_right_wrist": _parse_image(raw_obs["right_wrist"]),
+        "observation.state": state,
+        "observation.images.head": _parse_image(raw_obs["head"]),
+        "observation.images.left_wrist": _parse_image(raw_obs["left_wrist"]),
+        "observation.images.right_wrist": _parse_image(raw_obs["right_wrist"]),
     }
     if task:
         obs["prompt"] = task
